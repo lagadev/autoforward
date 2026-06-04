@@ -1,11 +1,10 @@
-import asyncio  # 💡 ছোট হাতের 'i' দিয়ে ঠিক করা হয়েছে
+import asyncio
 import json
 import os
-import threading
-from flask import Flask, request, jsonify
+from quart import Quart, request, jsonify
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # 💡 AsyncScheduler ব্যবহার করা হয়েছে
 
 # ======================
 # HARD CONFIG
@@ -17,16 +16,9 @@ SOURCE_MESSAGE = "https://t.me/c/3832960845/86"
 
 GROUP_FILE = "groups.json"
 
-app = Flask(__name__)
-
-# Render-এর জন্য একটি রুট পাথ যোগ করা হলো যাতে সার্ভার লাইভ আছে কিনা চেক করা যায়
-@app.route("/")
-def home():
-    return jsonify({"status": "healthy", "message": "Bot is running perfectly!"})
-
-# Asyncio Loop Setup
-client_loop = asyncio.new_event_loop()
-client = TelegramClient(StringSession(SESSION), API_ID, API_HASH, loop=client_loop)
+# Flask এর বদলে Quart অ্যাপ (সম্পূর্ণ Async)
+app = Quart(__name__)
+client = None
 
 # ======================
 # LOAD / SAVE GROUPS
@@ -35,17 +27,24 @@ def load_groups():
     if not os.path.exists(GROUP_FILE):
         return []
     with open(GROUP_FILE, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except:
+            return []
 
 def save_groups(groups):
     with open(GROUP_FILE, "w") as f:
         json.dump(groups, f)
 
 # ======================
-# ADD GROUP API
+# WEB ROUTES
 # ======================
+@app.route("/")
+async def home():
+    return jsonify({"status": "healthy", "message": "Bot is running perfectly on Quart!"})
+
 @app.route("/addgroup")
-def add_group():
+async def add_group():
     group_link = request.args.get("grouplink")
 
     if not group_link:
@@ -62,16 +61,14 @@ def add_group():
     return jsonify({"status": "success", "message": "group added"})
 
 # ======================
-# FORWARD LOGIC (SLOW MODE)
+# FORWARD LOGIC
 # ======================
 async def forward_to_all_groups():
-    if not client.is_connected():
-        await client.start()
-
+    print("Forward job started...")
     groups = load_groups()
 
     if not groups:
-        print("No groups found")
+        print("No groups found in JSON")
         return
 
     try:
@@ -84,42 +81,44 @@ async def forward_to_all_groups():
                 entity = await client.get_entity(group)
                 await client.forward_messages(entity, chat_id, msg_id)
                 print(f"[{i}/{len(groups)}] Sent to {group}")
-
+                
+                # সেফটি ডিলে
                 await asyncio.sleep(5)
-
             except Exception as e:
-                print(f"Failed {group}: {e}")
+                print(f"Failed to send to {group}: {e}")
 
     except Exception as e:
-        print("Source error:", e)
+        print("Source message parsing error:", e)
 
 # ======================
-# SCHEDULER (EVERY 1 HOUR)
+# STARTUP & SHUTDOWN LIFECYCLE
 # ======================
-scheduler = BackgroundScheduler()
+@app.while_running()
+async def lifecycle():
+    global client
+    print("Starting Telegram Client...")
+    
+    # Quart এর নিজস্ব রানিং লুপ ব্যবহার করে ক্লায়েন্ট শুরু করা হচ্ছে
+    loop = asyncio.get_running_loop()
+    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH, loop=loop)
+    await client.start()
+    print("Telegram Client Connected Successfully!")
 
-def job():
-    asyncio.run_coroutine_threadable(forward_to_all_groups(), loop=client_loop)
+    # অ্যাসিনক্রোনাস শিডিউলার সেটআপ
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(forward_to_all_groups, "interval", hours=1)
+    scheduler.start()
+    print("Scheduler Started (Every 1 Hour)")
 
-scheduler.add_job(job, "interval", hours=1)
-scheduler.start()
+    yield # এই লাইনের কারণে অ্যাপটি ব্যাকগ্রাউন্ডে চলতে থাকবে
+
+    # অ্যাপ বন্ধ হলে ক্লায়েন্ট ডিসকানেক্ট হবে
+    await client.disconnect()
 
 # ======================
-# START TELETHON IN BACKGROUND THREAD
-# ======================
-def run_telethon_loop():
-    asyncio.set_event_loop(client_loop)
-    client_loop.run_until_complete(client.start())
-    print("Telegram Client Started Successfully in Background!")
-    client_loop.run_forever()
-
-telethon_thread = threading.Thread(target=run_telethon_loop, daemon=True)
-telethon_thread.start()
-
-# ======================
-# START SERVER
+# RUN SERVER
 # ======================
 if __name__ == "__main__":
-    # Render-এর দেওয়া পোর্টে রান করার জন্য বাধ্য করা হচ্ছে
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # Quart রান করার সাথে সাথে লুপ নিজে থেকেই তৈরি হয়ে যাবে
+    app.run(host="0.0.0.0", port=port)
