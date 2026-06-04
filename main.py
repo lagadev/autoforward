@@ -1,4 +1,4 @@
-import asyncio
+import asyncio  # 💡 ছোট হাতের 'i' দিয়ে ঠিক করা হয়েছে
 import json
 import os
 import threading
@@ -19,7 +19,12 @@ GROUP_FILE = "groups.json"
 
 app = Flask(__name__)
 
-# ১. Python 3.14 এর জন্য একটি ডেডিকেটেড ইভেন্ট লুপ তৈরি করে ক্লায়েন্টে পাস করা হয়েছে
+# Render-এর জন্য একটি রুট পাথ যোগ করা হলো যাতে সার্ভার লাইভ আছে কিনা চেক করা যায়
+@app.route("/")
+def home():
+    return jsonify({"status": "healthy", "message": "Bot is running perfectly!"})
+
+# Asyncio Loop Setup
 client_loop = asyncio.new_event_loop()
 client = TelegramClient(StringSession(SESSION), API_ID, API_HASH, loop=client_loop)
 
@@ -60,7 +65,6 @@ def add_group():
 # FORWARD LOGIC (SLOW MODE)
 # ======================
 async def forward_to_all_groups():
-    # ক্লায়েন্ট কানেক্টেড না থাকলে কানেক্ট করবে
     if not client.is_connected():
         await client.start()
 
@@ -81,7 +85,6 @@ async def forward_to_all_groups():
                 await client.forward_messages(entity, chat_id, msg_id)
                 print(f"[{i}/{len(groups)}] Sent to {group}")
 
-                # 🔥 time.sleep() বদলে asyncio.sleep() ব্যবহার করা হয়েছে যাতে লুপ ব্লক না হয়
                 await asyncio.sleep(5)
 
             except Exception as e:
@@ -96,7 +99,6 @@ async def forward_to_all_groups():
 scheduler = BackgroundScheduler()
 
 def job():
-    # সঠিক ইভেন্ট লুপে টাস্কটি পুশ করা হচ্ছে
     asyncio.run_coroutine_threadable(forward_to_all_groups(), loop=client_loop)
 
 scheduler.add_job(job, "interval", hours=1)
@@ -111,7 +113,6 @@ def run_telethon_loop():
     print("Telegram Client Started Successfully in Background!")
     client_loop.run_forever()
 
-# আলাদা একটি থ্রেডে টেলিথনকে রান করানো হচ্ছে যাতে Flask ব্লক না হয়
 telethon_thread = threading.Thread(target=run_telethon_loop, daemon=True)
 telethon_thread.start()
 
@@ -119,5 +120,6 @@ telethon_thread.start()
 # START SERVER
 # ======================
 if __name__ == "__main__":
-    # Flask সার্ভার রান হবে মেইন থ্রেডে
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # Render-এর দেওয়া পোর্টে রান করার জন্য বাধ্য করা হচ্ছে
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
