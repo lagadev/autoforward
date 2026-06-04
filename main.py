@@ -23,9 +23,9 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 # Hardcoded credentials — replace with your own values before deploying
-API_ID = 1234567                     # Your API ID from my.telegram.org
-API_HASH = "your_api_hash_here"      # Your API Hash from my.telegram.org
-STRING_SESSION = "your_string_session_here"  # Generated via Telethon's client.start()
+API_ID = 32982831                     # Your API ID from my.telegram.org
+API_HASH = "a86d5defc5ac77fce9c6ee3c05aa76e9"      # Your API Hash from my.telegram.org
+STRING_SESSION = "1BVtsOG4BuyE0H_IWnbhXFLO2N75iqcF6Gx4PSVbXDR6sYq6QR3tH9YHlER6wQaGafr2XuuzJ3csWh5RDQCQIRvP2_RrwRTwzePMh3swqWjQ3WxP0EFCPwHVe4pjKgErVZjl7u4MDaPBxNuH5MvKNplu5cl0Ju1rzlMxXcvRLHELAhj7cUQ391DcsqznpsotQfaxhSYW9PIzn0nFQX_nwp8gS3RUuSNLaNiP0pCQfHLRSG4eyctZB7LxQ_NgUckJYFGzBLXyiBBhklbRKkSdr2T1baqgXKBCtzHlumx6JYQAb7wk0qe3V4lGxo1SR7iqYZt0giDQ7xP6L8OUTzanwwXJekSK3Bt8="  # Generated via Telethon's client.start()
 
 # Source message — private channel post to be forwarded
 SOURCE_CHANNEL_LINK = "https://t.me/c/3832960845/86"
