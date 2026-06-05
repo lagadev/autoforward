@@ -1,5 +1,5 @@
 """
-Telegram Auto Forward System (Dynamic Authentication Version)
+Telegram Auto Forward System (Dynamic Authentication & Thread-Safe Version)
 Backend API for automatically forwarding messages from a private Telegram channel
 to multiple groups at scheduled intervals.
 Deploy-ready for Render with Flask, Telethon, and APScheduler.
@@ -23,7 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-# ডাইনামিক ক্রিশেনশিয়ালস: এই ৩টি এখন credentials.json ফাইলে সেভ থাকবে
+# ডাইনামিক ক্রেডেনশিয়ালস: এই ফাইলটিতে সেশন এবং এপিআই ডাটা সেভ থাকবে
 CREDENTIALS_FILE = Path("data/credentials.json")
 
 SOURCE_CHANNEL_LINK = "https://t.me/c/3832960845/86"
@@ -104,17 +104,20 @@ class TelegramBot:
         self._connected = False
         self._source_entity = None
         self._source_msg_id = None
-        # অথেনটিকেশন স্টেপস ট্র্যাকিং করার জন্য গ্লোবাল অবজেক্ট
+        # ওটিপি ভেরিফিকেশন স্টেপ ট্র্যাকিং ভ্যারিয়েবল
         self.phone_code_hash = None
         self.current_phone = None
 
     def is_authenticated(self):
-        """চেক করে সেশন ফাইল বা ক্রেডেনশিয়াল অলরেডি আছে কি না।"""
-        creds = load_json(CREDENTIALS_FILE)
-        return bool(creds.get("string_session") and creds.get("api_id") and creds.get("api_hash"))
+        """চেক করে সেশন ডাটা অলরেডি সেভ আছে কি না।"""
+        try:
+            creds = load_json(CREDENTIALS_FILE)
+            return bool(creds.get("string_session") and creds.get("api_id") and creds.get("api_hash"))
+        except Exception:
+            return False
 
     async def start(self):
-        """যদি সেশন ভ্যালিড থাকে তবেই কানেক্ট করবে।"""
+        """যদি সেশন ভ্যালিড থাকে তবেই ব্যাকগ্রাউন্ডে কানেক্ট করবে।"""
         if not self._connected:
             if not self.is_authenticated():
                 logger.warning("টেলিগ্রাম ক্লায়েন্ট চালু করা যায়নি: সেশন ডাটা অনুপস্থিত।")
@@ -202,11 +205,32 @@ class TelegramBot:
 # ─── Flask Application ────────────────────────────────────────────────────────
 app = Flask(__name__)
 bot = TelegramBot()
-scheduler = BackgroundScheduler(daemon=True, timezone=ZoneInfo("Asia/Dhaka"))
-loop = asyncio.new_event_loop()
 
+# APScheduler সরাসরি বাংলাদেশ টাইমজোন (Asia/Dhaka) দিয়ে ডিফাইন করা
+scheduler = BackgroundScheduler(daemon=True, timezone=ZoneInfo("Asia/Dhaka"))
+
+
+# ─── THREAD-SAFE ASYNC RUNNER (FIXES RUNTIME ERROR) ───────────────────────────
 def run_async(coro):
-    return loop.run_until_complete(coro)
+    """
+    ফ্লাস্কের আলাদা আলাদা রিকোয়েস্ট থ্রেডের ভেতর আইসোলেটেড ইভেন্ট লুপ তৈরি করে 
+    টেলিগ্রামের কোড রান করায়। এটি 'no running event loop' এরর স্থায়ীভাবে বন্ধ করে।
+    """
+    try:
+        thr_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        thr_loop = None
+
+    if thr_loop and thr_loop.is_running():
+        return asyncio.run_coroutine_threadsafe(coro, thr_loop).result()
+    else:
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
 
 # ─── Scheduled Job ────────────────────────────────────────────────────────────
 def forward_job():
@@ -268,19 +292,19 @@ async def _forward_job_async():
     for entry in job_logs: append_log(entry)
     logger.info("=== Forward job completed ===")
 
-# ─── Auth API Endpoints (নতুন ফিচারস) ──────────────────────────────────────
+# ─── Auth API Endpoints ───────────────────────────────────────────────────────
 
 @app.route("/setnum", methods=["GET", "POST"])
 def set_num():
     """
-    ধাপ ১: নম্বর এবং API ক্রেডেনশিয়াল রিসিভ করে টেলিগ্রামে OTP রিকোয়েস্ট পাঠানো।
-    ব্যবহার: /setnum?setnum=+88017XXXXXXXX&api_id=12345&api_hash=abcdef...
+    ধাপ ১: নম্বর ইনপুট নিয়ে টেলিগ্রামে OTP রিকোয়েস্ট পাঠানো।
+    ব্যবহার: /setnum?setnum=+88017XXXXXXXX
     """
     phone = request.args.get("setnum") or (request.get_json(silent=True) or {}).get("setnum")
     api_id = request.args.get("api_id") or (request.get_json(silent=True) or {}).get("api_id")
     api_hash = request.args.get("api_hash") or (request.get_json(silent=True) or {}).get("api_hash")
 
-    # আপনার দেওয়া ডিফল্ট ক্রেডেনশিয়াল (যদি ইউজার আলাদা এপিআই আইডি না পাঠায়)
+    # ডিফল্ট এপিআই ক্রেডেনশিয়াল সেট করা আছে
     if not api_id: api_id = "32982831"
     if not api_hash: api_hash = "a86d5defc5ac77fce9c6ee3c05aa76e9"
 
@@ -288,17 +312,18 @@ def set_num():
         return jsonify({"error": "Missing 'setnum' parameter (e.g. +88017XXXXXXXX)"}), 400
 
     try:
-        # সাময়িক ক্লায়েন্ট অবজেক্ট তৈরি করে কোড সেন্ড করা
+        # ওটিপি পাঠানোর জন্য টেম্পোরারি ক্লায়েন্ট তৈরি
         bot.client = TelegramClient(StringSession(), int(api_id), api_hash)
         run_async(bot.client.connect())
         
-        # ওটিপি সেন্ড প্রসেস
+        # টেলিগ্রাম সার্ভারে ওটিপি রিকোয়েস্ট পাঠানো
         code_sign = run_async(bot.client.send_code_request(phone))
         
+        # মেমরিতে ওটিপি ট্র্যাকিং ডাটা হোল্ড করা
         bot.phone_code_hash = code_sign.phone_code_hash
         bot.current_phone = phone
         
-        # পরে ভেরিফাই করার জন্য এগুলো টেম্পোরারি ফাইলে সেভ রাখা
+        # পরবর্তী ভেরিফিকেশনের সুবিধার্থে ফাইল আপডেট করা
         save_json(CREDENTIALS_FILE, {"api_id": api_id, "api_hash": api_hash, "string_session": None, "phone": phone})
         
         return jsonify({"message": f"OTP successfully sent to {phone}. Now call /verify to complete login."}), 200
@@ -310,9 +335,9 @@ def set_num():
 @app.route("/verify", methods=["GET", "POST"])
 def verify_code():
     """
-    ধাপ ২: ওটিপি ভেরিফাই করে সেশন জেনারেট করা।
+    ধাপ ২: ওটিপি কোড ভেরিফাই করে সেশন জেনারেট করা।
     ব্যবহার: /verify?code=12345
-    যদি ২-স্টেপ পাসওয়ার্ড থাকে: /verify?code=12345&password=your_password
+    ২-স্টেপ ভেরিফিকেশন অন থাকলে: /verify?code=12345&password=your_password
     """
     code = request.args.get("code") or (request.get_json(silent=True) or {}).get("code")
     password = request.args.get("password") or (request.get_json(silent=True) or {}).get("password")
@@ -326,21 +351,21 @@ def verify_code():
         creds = load_json(CREDENTIALS_FILE)
         
         try:
-            # লগইন সম্পূর্ণ করা
+            # ওটিপি সাবমিট করে সাইন ইন করা
             run_async(bot.client.sign_in(bot.current_phone, code, phone_code_hash=bot.phone_code_hash))
         except errors.SessionPasswordNeededError:
             if not password:
                 return jsonify({"error": "2-Step Verification is enabled on this account. Please pass 'password' parameter."}), 401
             run_async(bot.client.sign_in(password=password))
 
-        # লগইন সফল হলে স্ট্রিং সেশন জেনারেট করা
+        # সফল হলে নতুন String Session জেনারেট করা
         string_session = bot.client.session.save()
         
-        # চূড়ান্ত ক্রেডেনশিয়াল সেভ রাখা
+        # ক্রেডেনশিয়াল ফাইলে পাকাপাকিভাবে সেভ করা
         creds["string_session"] = string_session
         save_json(CREDENTIALS_FILE, creds)
         
-        # বটের মেইন ক্লায়েন্ট রিস্টার্ট করা
+        # মেইন ক্লায়েন্ট বন্ধ করে নতুন সেশন দিয়ে স্টার্ট করা
         run_async(bot.stop())
         run_async(bot.start())
         
@@ -354,7 +379,7 @@ def verify_code():
 
 @app.route("/logout", methods=["POST", "GET"])
 def logout():
-    """বর্তমান অ্যাকাউন্টটি সেশন ফাইল থেকে মুছে ফেলার এন্ডপয়েন্ট।"""
+    """চলতি সেশন এবং ক্রেডেনশিয়াল রিসেট করা।"""
     run_async(bot.stop())
     save_json(CREDENTIALS_FILE, {"api_id": None, "api_hash": None, "string_session": None, "phone": None})
     update_stats(bot_status="unauthenticated")
@@ -444,6 +469,7 @@ def clear_logs():
     save_json(LOGS_FILE, [])
     return jsonify({"message": "Logs cleared"})
 
+
 # ─── Application Entry Point ──────────────────────────────────────────────────
 
 def start_scheduler():
@@ -461,9 +487,8 @@ def start_scheduler():
 
 def main():
     ensure_data_dir()
-    asyncio.set_event_loop(loop)
 
-    # রান হওয়ার সময় যদি অলরেডি সেশন থাকে, তবে অটো লগইন করবে
+    # মেইন থ্রেডে যদি আগে থেকে ভ্যালিড সেশন স্টোর করা থাকে, তবে রান করার সময় অটো লগইন হবে
     if bot.is_authenticated():
         try:
             run_async(bot.start())
